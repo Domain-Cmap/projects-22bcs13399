@@ -1,0 +1,169 @@
+import React, { useEffect, useRef, useState } from 'react';
+import * as faceapi from 'face-api.js';
+import { Camera, Loader2 } from 'lucide-react';
+
+function App() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [isModelLoading, setIsModelLoading] = useState(true);
+  const [loadingError, setLoadingError] = useState<string>('');
+  const [stressLevel, setStressLevel] = useState<string>('');
+
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        // Load models from the public directory
+        await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+        await faceapi.nets.faceExpressionNet.loadFromUri('/models');
+        await faceapi.nets.faceLandmark68Net.loadFromUri('/models'); // Required for expressions
+        
+        startVideo();
+        setIsModelLoading(false);
+        setLoadingError('');
+      } catch (error) {
+        console.error('Error loading models:', error);
+        setLoadingError('Failed to load facial recognition models. Please refresh the page and try again.');
+        setIsModelLoading(false);
+      }
+    };
+
+    loadModels();
+
+    // Cleanup function to stop video stream
+    return () => {
+      if (videoRef.current?.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        const tracks = stream.getTracks();
+        tracks.forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  const startVideo = () => {
+    navigator.mediaDevices
+      .getUserMedia({ 
+        video: {
+          width: 720,
+          height: 560
+        } 
+      })
+      .then((stream) => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      })
+      .catch((err) => {
+        console.error('Error accessing camera:', err);
+        setLoadingError('Unable to access camera. Please ensure camera permissions are granted.');
+      });
+  };
+
+  const handleVideoPlay = () => {
+    setInterval(async () => {
+      if (canvasRef.current && videoRef.current) {
+        const displaySize = {
+          width: videoRef.current.width,
+          height: videoRef.current.height,
+        };
+
+        faceapi.matchDimensions(canvasRef.current, displaySize);
+
+        try {
+          const detections = await faceapi
+            .detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions())
+            .withFaceLandmarks()
+            .withFaceExpressions();
+
+          if (detections.length > 0) {
+            const expressions = detections[0].expressions;
+            const stressIndicators = expressions.angry + expressions.fearful + expressions.sad;
+            
+            let stress = 'Low';
+            if (stressIndicators > 0.6) stress = 'High';
+            else if (stressIndicators > 0.3) stress = 'Medium';
+            
+            setStressLevel(stress);
+          }
+
+          const resizedDetections = faceapi.resizeResults(detections, displaySize);
+          canvasRef.current.getContext('2d')?.clearRect(0, 0, displaySize.width, displaySize.height);
+          faceapi.draw.drawDetections(canvasRef.current, resizedDetections);
+          faceapi.draw.drawFaceExpressions(canvasRef.current, resizedDetections);
+        } catch (error) {
+          console.error('Error during face detection:', error);
+        }
+      }
+    }, 100);
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+      <div className="max-w-4xl mx-auto">
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-gray-800 mb-4">
+            Stress Level Detection
+          </h1>
+          <p className="text-lg text-gray-600">
+            Real-time stress detection using facial expression analysis
+          </p>
+        </div>
+
+        {isModelLoading ? (
+          <div className="flex flex-col items-center justify-center p-8 bg-white rounded-lg shadow-lg">
+            <Loader2 className="w-12 h-12 animate-spin text-indigo-600 mb-4" />
+            <p className="text-gray-700">Loading facial recognition models...</p>
+          </div>
+        ) : loadingError ? (
+          <div className="p-8 bg-white rounded-lg shadow-lg">
+            <p className="text-red-600 text-center">{loadingError}</p>
+          </div>
+        ) : (
+          <div className="bg-white p-6 rounded-lg shadow-lg">
+            <div className="relative">
+              <video
+                ref={videoRef}
+                autoPlay
+                muted
+                width="720"
+                height="560"
+                onPlay={handleVideoPlay}
+                className="rounded-lg"
+              />
+              <canvas
+                ref={canvasRef}
+                className="absolute top-0 left-0"
+                width="720"
+                height="560"
+              />
+            </div>
+
+            <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <Camera className="w-6 h-6 text-indigo-600 mr-2" />
+                  <span className="text-gray-700 font-medium">Current Stress Level:</span>
+                </div>
+                <span className={`px-4 py-2 rounded-full font-semibold ${
+                  stressLevel === 'High' ? 'bg-red-100 text-red-800' :
+                  stressLevel === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
+                  'bg-green-100 text-green-800'
+                }`}>
+                  {stressLevel || 'Analyzing...'}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-8 text-center text-sm text-gray-600">
+          <p>
+            This application uses facial expression analysis to estimate stress levels.
+            Please ensure good lighting and face the camera directly for best results.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
